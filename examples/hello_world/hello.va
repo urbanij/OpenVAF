@@ -1,0 +1,14 @@
+`include "constants.vams"
+`include "disciplines.vams"
+
+module hello_world(p);
+
+	inout p ;
+	electrical p ;
+
+	analog begin
+		@(initial_step)
+			$strobe("Hello World!") ;
+	end
+
+endmodule
