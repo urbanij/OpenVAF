@@ -22,6 +22,18 @@ fn main() {
     let osdi_dir = stdx::project_root().join("openvaf").join("osdi");
     let src_file = osdi_dir.join("stdlib.c");
 
+    // Use the clang from the same LLVM installation as llvm-config (if set)
+    // to avoid bitcode version mismatches between the build-time clang and
+    // the runtime LLVM library.
+    let clang = tracked_env_var_os("LLVM_CONFIG")
+        .map(|path| {
+            let parent = std::path::Path::new(&path).parent();
+            parent
+                .map(|p| p.join("clang").to_string_lossy().into_owned())
+                .unwrap_or_else(|| "clang".to_string())
+        })
+        .unwrap_or_else(|| "clang".to_string());
+
     sh.change_dir(osdi_dir);
     for file in sh.read_dir("header").unwrap() {
         if file.extension().map_or(true, |ext| ext != "h")
@@ -47,7 +59,7 @@ fn main() {
             } else {
                 println!("cargo:rerun-if-changed={}", file.display());
 
-                let mut cmd = cmd!(sh, "clang -emit-llvm -O3 -D{def_name} -DNO_STD -o {out_file} -c {src_file} -target {target_name}");
+                let mut cmd = cmd!(sh, "{clang} -emit-llvm -O3 -D{def_name} -DNO_STD -o {out_file} -c {src_file} -target {target_name}");
                 if !target.options.is_like_windows {
                     cmd = cmd.arg("-fPIC");
                 }

@@ -18,5 +18,16 @@ pub fn host_triple() -> &'static str {
     // Instead of grabbing the host triple (for the current host), we grab (at
     // compile time) the target triple that this rustc is built with and
     // calling that (at runtime) the host triple.
-    (env!("CFG_COMPILER_HOST_TRIPLE")).rsplit_once('-').unwrap().0
+    let triple = env!("CFG_COMPILER_HOST_TRIPLE");
+    // Rust target triples have the form arch-vendor-os-env (e.g.
+    // aarch64-unknown-linux-gnu).  OpenVAF targets drop the environment
+    // suffix (e.g. aarch64-unknown-linux) but keep all other segments.
+    // darwin targets don't have an environment segment (e.g.
+    // aarch64-apple-darwin), so we only strip it when there are 4+ segments.
+    let dash_count = triple.matches('-').count();
+    if dash_count > 2 {
+        triple.rsplit_once('-').unwrap().0
+    } else {
+        triple
+    }
 }

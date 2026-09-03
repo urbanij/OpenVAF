@@ -89,6 +89,14 @@ fn linker_with_args<'a>(
 
     cmd.add_pre_link_args(target, flavor);
 
+    // macOS system libraries (e.g. libSystem) only exist as tbd stubs inside the
+    // SDK, so `ld` needs `-syslibroot` to resolve `-lSystem` (like rustc does).
+    if target.options.is_like_osx {
+        if let Some(sdk) = get_apple_sdk_root() {
+            cmd.cmd().arg("-syslibroot").arg(sdk);
+        }
+    }
+
     add_objects(&mut *cmd);
     cmd.output_filename(out_filename);
     cmd.set_output_kind();
@@ -101,6 +109,21 @@ fn linker_with_args<'a>(
 //// The third parameter is for env vars, used on windows to set up the
 //// path for MSVC to find its DLLs, and gcc to find its bundled
 //// toolchain
+fn get_apple_sdk_root() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("SDKROOT") {
+        if !path.is_empty() {
+            return Some(path.into());
+        }
+    }
+    let output = std::process::Command::new("xcrun").arg("--show-sdk-path").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let path = stdout.trim();
+    if path.is_empty() { None } else { Some(PathBuf::from(path)) }
+}
+
 fn get_linker<'a>(
     path: Option<PathBuf>,
     flavor: LinkerFlavor,

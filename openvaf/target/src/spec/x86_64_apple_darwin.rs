@@ -16,6 +16,8 @@ pub fn target() -> Target {
         ],
     );
 
+    base.post_link_args.insert(LinkerFlavor::Ld64, vec!["-lSystem".to_string()]);
+
     Target {
         llvm_target: "x86_64-apple-macosx10.15.0".to_owned(),
         arch: "x86_64".to_owned(),
