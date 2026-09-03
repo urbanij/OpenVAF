@@ -315,6 +315,9 @@ impl<'ll> OsdiCompilationUnit<'_, '_, 'll> {
 
 impl OsdiModule<'_> {
     pub fn intern_node_strs(&self, intern: &mut Rodeo, db: &CompilationDB) {
+        // residual units are currently always empty but are still looked up
+        // during codegen, so make sure the empty string is always interned.
+        intern.get_or_intern("");
         for &unknown in self.dae_system.unknowns.iter() {
             let (name, units, _) = sim_unknown_info(unknown, db);
             intern.get_or_intern(&name);

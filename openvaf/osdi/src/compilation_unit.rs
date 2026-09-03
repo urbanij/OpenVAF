@@ -325,14 +325,15 @@ fn print_callback<'ll>(
         LLVMBuildCondBr(llbuilder, is_err, err_bb, alloc_bb);
 
         LLVMPositionBuilderAtEnd(llbuilder, alloc_bb);
-        let data_len = LLVMBuildAdd(llbuilder, len, cx.const_int(1), UNNAMED);
+        let len_wide = llvm::LLVMBuildIntCast2(llbuilder, len, cx.ty_size(), llvm::False, UNNAMED);
+        let data_len = LLVMBuildAdd(llbuilder, len_wide, cx.const_usize(1), UNNAMED);
         let ptr = LLVMBuildArrayMalloc(llbuilder, cx.ty_char(), data_len, UNNAMED);
         let null_ptr = cx.const_null_ptr();
         let is_err = LLVMBuildICmp(llbuilder, llvm::IntPredicate::IntEQ, null_ptr, ptr, UNNAMED);
         LLVMBuildCondBr(llbuilder, is_err, err_bb, write_bb);
 
         LLVMPositionBuilderAtEnd(llbuilder, write_bb);
-        let data_len = LLVMBuildAdd(llbuilder, len, cx.const_int(1), UNNAMED);
+        let data_len = LLVMBuildAdd(llbuilder, len_wide, cx.const_usize(1), UNNAMED);
         args[0] = ptr;
         args[1] = data_len;
         let len = LLVMBuildCall2(llbuilder, fun_ty, fun, args.as_ptr(), args.len() as u32, UNNAMED);
