@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux binaries link LLVM statically and are self-contained.
+          - os: ubuntu-24.04
+            artifact: openvaf-linux-amd64
+          # macOS binaries link LLVM shared (static linking is not supported
+          # by the Homebrew distribution); the artifact bundles libLLVM and
+          # its Homebrew dependencies with rewritten install names.
+          - os: macos-15
+            artifact: openvaf-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # ------------------------------------------------------------------
+      # LLVM 23 + ngspice
+      # ------------------------------------------------------------------
+      - name: Install LLVM 23 and ngspice (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-23.list
+          sudo apt-get update
+          sudo apt-get install -y llvm-23-dev clang-23 lld ngspice \
+            zlib1g-dev libzstd-dev libedit-dev libffi-dev
+          /usr/lib/llvm-23/bin/llvm-config --version
+          ngspice --version | head -1
+
+      - name: Install LLVM 23 and ngspice (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # lld is required because .cargo/config.toml sets -fuse-ld=lld
+          brew install llvm lld ngspice
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix llvm)/bin/llvm-config" --version
+          ngspice --version | head -1
+
+      # ------------------------------------------------------------------
+      # Build
+      # ------------------------------------------------------------------
+      # LLVM_LINK_SHARED=1 is required on macOS because the Homebrew LLVM
+      # distribution cannot be linked statically (missing/incomplete static
+      # archives). Linux links statically so the artifact is self-contained.
+      - name: Build openvaf
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            export LLVM_CONFIG=/usr/lib/llvm-23/bin/llvm-config
+          else
+            export LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
+            export LLVM_LINK_SHARED=1
+          fi
+          cargo build --release --bin openvaf
+
+      # ------------------------------------------------------------------
+      # Examples
+      # ------------------------------------------------------------------
+      - name: Add openvaf to PATH
+        run: echo "$PWD/target/release" >> "$GITHUB_PATH"
+
+      - name: Run hello_world example
+        working-directory: examples/hello_world
+        run: |
+          openvaf hello.va
+          ngspice -b hello.sp | tee ngspice.log
+          grep -q "Hello World!" ngspice.log
+
+      - name: Run example_1 (HICUM/L2)
+        working-directory: examples/example_1
+        run: |
+          openvaf hicumL2V3p0p0.va
+          ngspice -b netlist_osdi.sp | tee ngspice.log
+          grep -q "No. of Data Rows" ngspice.log
+
+      # ------------------------------------------------------------------
+      # Artifacts
+      # ------------------------------------------------------------------
+      - name: Package artifact (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf ${{ matrix.artifact }}.tar.gz -C target/release openvaf
+
+      - name: Package artifact (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          mkdir stage
+
+          # Bundle the shared LLVM library and its Homebrew dependencies and
+          # rewrite their install names to @executable_path/@loader_path so
+          # the binary is self-contained, then re-sign (required on arm64).
+          LLVM_DYLIB=$(otool -L target/release/openvaf | awk '/libLLVM/{print $1; exit}')
+          Z3_DYLIB=$(otool -L "$LLVM_DYLIB" | awk '/libz3/{print $1; exit}')
+          ZSTD_DYLIB=$(otool -L "$LLVM_DYLIB" | awk '/libzstd/{print $1; exit}')
+
+          cp target/release/openvaf stage/
+          cp "$LLVM_DYLIB" "$Z3_DYLIB" "$ZSTD_DYLIB" stage/
+
+          LLVM_BASE=$(basename "$LLVM_DYLIB")
+          Z3_BASE=$(basename "$Z3_DYLIB")
+          ZSTD_BASE=$(basename "$ZSTD_DYLIB")
+
+          install_name_tool -change "$Z3_DYLIB"   "@loader_path/$Z3_BASE"   "stage/$LLVM_BASE"
+          install_name_tool -change "$ZSTD_DYLIB" "@loader_path/$ZSTD_BASE" "stage/$LLVM_BASE"
+          install_name_tool -change "$LLVM_DYLIB" "@executable_path/$LLVM_BASE" stage/openvaf
+
+          codesign -f -s - "stage/$LLVM_BASE"
+          codesign -f -s - stage/openvaf
+
+          tar -czf ${{ matrix.artifact }}.tar.gz -C stage .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
