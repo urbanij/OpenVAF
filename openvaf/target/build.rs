@@ -6,13 +6,18 @@ use std::path::PathBuf;
 use xshell::{cmd, Shell};
 
 fn main() {
-    println!("cargo:rustc-env=CFG_COMPILER_HOST_TRIPLE={}", std::env::var("TARGET").unwrap());
+    let target = std::env::var("TARGET").unwrap();
+    println!("cargo:rustc-env=CFG_COMPILER_HOST_TRIPLE={}", target);
     // If we're just running `check`, there's no need to actually compute the stdlib just
     // popualte dummys
     let check = tracked_env_var_os("RUST_CHECK").is_some();
+    // The ucrt import libraries are only needed when targeting Windows MSVC.
+    // On other platforms (or during `cargo check`) we write dummy files so
+    // that the `include_bytes!` in the Windows target specs still compiles.
+    let needs_real_ucrt = target.contains("windows-msvc");
     let sh = Shell::new().unwrap();
-    gen_msvcrt_importlib(&sh, "x64", "x86_64", check);
-    gen_msvcrt_importlib(&sh, "arm64", "aarch64", check);
+    gen_msvcrt_importlib(&sh, "x64", "x86_64", check || !needs_real_ucrt);
+    gen_msvcrt_importlib(&sh, "arm64", "aarch64", check || !needs_real_ucrt);
 }
 
 /// Reads an environment variable and adds it to dependencies.
