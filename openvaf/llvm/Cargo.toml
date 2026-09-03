@@ -5,7 +5,7 @@ authors = ["DSPOM"]
 edition = "2021"
 license = "GPL-3.0"
 
-links = "llvm-13"
+links = "llvm-23"
 build = "build.rs"
 
 [lib]

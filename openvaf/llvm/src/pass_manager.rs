@@ -1,82 +1,88 @@
-use libc::c_uint;
+use std::ffi::CString;
+use std::fmt;
 
-use crate::module::function_iter;
-use crate::util::InvariantOpaque;
-use crate::{Bool, Module, OptLevel, PassManager, PassManagerBuilder, Value};
+use libc::{c_char, c_int};
 
-#[repr(C)]
-pub struct FunctionPassManager<'a>(InvariantOpaque<'a>);
+use crate::{Error, Module, OptLevel, PassBuilderOptions, TargetMachine};
 
 extern "C" {
+    // New pass manager API (replaces the old PassManagerBuilder)
+    pub fn LLVMCreatePassBuilderOptions() -> &'static mut PassBuilderOptions;
+    pub fn LLVMDisposePassBuilderOptions(Options: &'static mut PassBuilderOptions);
+    pub fn LLVMPassBuilderOptionsSetSLPVectorization(
+        Options: &PassBuilderOptions,
+        SLPVectorization: crate::Bool,
+    );
+    pub fn LLVMPassBuilderOptionsSetLoopUnrolling(
+        Options: &PassBuilderOptions,
+        LoopUnrolling: crate::Bool,
+    );
+    pub fn LLVMPassBuilderOptionsSetInlinerThreshold(Options: &PassBuilderOptions, Threshold: c_int);
 
-    // crate and destroy
-    pub fn LLVMPassManagerBuilderCreate() -> &'static mut PassManagerBuilder;
-    pub fn LLVMPassManagerBuilderDispose(PMB: &'static mut PassManagerBuilder);
+    /// Run passes on a module. Returns null on success, or an Error on failure.
+    pub fn LLVMRunPasses(
+        M: &Module,
+        Passes: *const c_char,
+        TM: Option<&TargetMachine>,
+        Options: &PassBuilderOptions,
+    ) -> Option<&'static mut Error>;
 
-    fn LLVMPassManagerBuilderSetOptLevel(PMB: &PassManagerBuilder, OptLevel: c_uint);
-    pub fn LLVMPassManagerBuilderSetSizeLevel(PMB: &PassManagerBuilder, SizeLevel: c_uint);
-    fn LLVMPassManagerBuilderSLPVectorize(PMB: &PassManagerBuilder);
+    // Error handling
+    pub fn LLVMConsumeError(Err: &'static mut Error);
+    pub fn LLVMGetErrorMessage(Err: &'static mut Error) -> *mut c_char;
+    pub fn LLVMDisposeErrorMessage(ErrMsg: *mut c_char);
+}
 
-    pub fn LLVMPassManagerBuilderSetDisableUnitAtATime(PMB: &PassManagerBuilder, Value: Bool);
-    pub fn LLVMPassManagerBuilderSetDisableUnrollLoops(PMB: &PassManagerBuilder, Value: Bool);
-    pub fn LLVMPassManagerBuilderSetDisableSimplifyLibCalls(PMB: &PassManagerBuilder, Value: Bool);
-    pub fn LLVMPassManagerBuilderUseInlinerWithThreshold(
-        PMB: &PassManagerBuilder,
-        threshold: c_uint,
-    );
-    pub fn LLVMPassManagerBuilderPopulateFunctionPassManager(
-        PMB: &PassManagerBuilder,
-        PM: &PassManager<'_>,
-    );
-    pub fn LLVMPassManagerBuilderPopulateModulePassManager(
-        PMB: &PassManagerBuilder,
-        PM: &PassManager<'_>,
-    );
-    pub fn LLVMPassManagerBuilderPopulateLTOPassManager(
-        PMB: &mut PassManagerBuilder,
-        PM: &PassManager<'_>,
-        Internalize: Bool,
-        RunInliner: Bool,
-    );
+/// Map an OptLevel to the new pass manager pipeline string.
+fn opt_level_pipeline(opt_lvl: OptLevel) -> &'static str {
+    match opt_lvl {
+        OptLevel::None => "default<O0>",
+        OptLevel::Less => "default<O1>",
+        OptLevel::Default => "default<O2>",
+        OptLevel::Aggressive => "default<O3>",
+    }
 }
 
 /// # Safety
-/// This should always be save but this low level wrapper purposefully refrains from making Safety
-/// garantuees
-pub unsafe fn pass_manager_builder_set_opt_lvl(pmb: &PassManagerBuilder, opt_lvl: OptLevel) {
-    LLVMPassManagerBuilderSetOptLevel(pmb, opt_lvl as c_uint);
+/// This function calls the LLVM C API. The module must be valid.
+pub unsafe fn run_passes(
+    module: &Module,
+    opt_lvl: OptLevel,
+    target_machine: Option<&TargetMachine>,
+) -> Result<(), String> {
+    let options = LLVMCreatePassBuilderOptions();
     if opt_lvl > OptLevel::Less {
-        LLVMPassManagerBuilderSLPVectorize(pmb);
+        LLVMPassBuilderOptionsSetSLPVectorization(options, crate::True);
+    }
+    LLVMPassBuilderOptionsSetLoopUnrolling(options, crate::True);
+
+    let pipeline = CString::new(opt_level_pipeline(opt_lvl)).unwrap();
+    let err = LLVMRunPasses(module, pipeline.as_ptr(), target_machine, options);
+    LLVMDisposePassBuilderOptions(options);
+
+    if let Some(err) = err {
+        let msg_ptr = LLVMGetErrorMessage(err);
+        let msg = if msg_ptr.is_null() {
+            "unknown LLVM error".to_string()
+        } else {
+            let msg = std::ffi::CStr::from_ptr(msg_ptr).to_string_lossy().into_owned();
+            LLVMDisposeErrorMessage(msg_ptr);
+            msg
+        };
+        Err(msg)
+    } else {
+        Ok(())
     }
 }
 
-// Core->Pass managers
-extern "C" {
-    /// Creates a pass manager.
-    pub fn LLVMCreatePassManager() -> &'static mut PassManager<'static>;
+// Re-export for compatibility
+pub use crate::module::function_iter;
 
-    /// Creates a function-by-function pass manager
-    pub fn LLVMCreateFunctionPassManagerForModule<'a>(M: &'a Module) -> &'a mut PassManager<'a>;
+/// Wrapper for displaying pass errors
+pub struct PassError(pub String);
 
-    /// Disposes a pass manager.
-    pub fn LLVMDisposePassManager<'a>(PM: &'a mut PassManager<'a>);
-
-    /// Runs a pass manager on a module.
-    pub fn LLVMRunPassManager(PM: &PassManager<'static>, M: &Module) -> Bool;
-
-    fn LLVMInitializeFunctionPassManager(FPM: &PassManager<'_>) -> Bool;
-    fn LLVMRunFunctionPassManager<'a>(FPM: &PassManager<'a>, F: &'a Value) -> Bool;
-    fn LLVMFinalizeFunctionPassManager(FPM: &PassManager<'_>) -> Bool;
-}
-
-/// # Safety
-/// This function calls the LLVM C Api.
-/// If the module or its contents have been incorrectly constructed this can cause UB
-/// If the pass manager is not a function pass manager but a global pass manager this will cause UB
-pub unsafe fn run_function_pass_manager<'a>(fpm: &PassManager<'a>, module: &'a Module) {
-    LLVMInitializeFunctionPassManager(fpm);
-    for fun in function_iter(module) {
-        LLVMRunFunctionPassManager(fpm, fun);
+impl fmt::Display for PassError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LLVM pass error: {}", self.0)
     }
-    LLVMFinalizeFunctionPassManager(fpm);
 }

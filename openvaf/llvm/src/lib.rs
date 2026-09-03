@@ -128,9 +128,18 @@ impl fmt::Debug for PassRegistry {
     }
 }
 
-pub enum PassManagerBuilder {}
+pub enum PassBuilderOptions {}
 
-impl fmt::Debug for PassManagerBuilder {
+impl fmt::Debug for PassBuilderOptions {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+}
+
+/// Opaque LLVM error reference. Null means success.
+pub enum Error {}
+
+impl fmt::Debug for Error {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Ok(())
     }
@@ -329,9 +338,9 @@ pub type LLVMYieldCallback = Option<extern "C" fn(arg1: &Context, ctx: *mut c_vo
 pub fn get_version() -> (u32, u32, u32) {
     // If RUST_CHECK is set we do not link LLVM and the version is not known, just use dummy values in that case
     (
-        option_env!("LLVM_VERSION_MAJOR").map_or(14, |it| it.parse().unwrap()),
+        option_env!("LLVM_VERSION_MAJOR").map_or(23, |it| it.parse().unwrap()),
         option_env!("LLVM_VERSION_MINOR").map_or(0, |it| it.parse().unwrap()),
-        option_env!("LLVM_VERSION_PATCH").map_or(6, |it| it.parse().unwrap()),
+        option_env!("LLVM_VERSION_PATCH").map_or(0, |it| it.parse().unwrap()),
     )
 }
 

@@ -6,21 +6,9 @@ use std::sync::Once;
 use ahash::AHashSet;
 use libc::{c_char, c_int};
 
-use crate::{Bool, PassRegistry};
+use crate::Bool;
 
 extern "C" {
-    fn LLVMInitializeCore(R: *mut PassRegistry);
-    fn LLVMInitializeTransformUtils(R: *mut PassRegistry);
-    fn LLVMInitializeScalarOpts(R: *mut PassRegistry);
-    fn LLVMInitializeVectorization(R: *mut PassRegistry);
-    fn LLVMInitializeInstCombine(R: *mut PassRegistry);
-    // fn LLVMInitializeAggressiveInstCombiner(R: *mut PassRegistry);
-    fn LLVMInitializeIPO(R: *mut PassRegistry);
-    fn LLVMInitializeAnalysis(R: *mut PassRegistry);
-    fn LLVMInitializeCodeGen(R: *mut PassRegistry);
-    fn LLVMInitializeTarget(R: *mut PassRegistry);
-
-    fn LLVMGetGlobalPassRegistry() -> *mut PassRegistry;
     fn LLVMIsMultithreaded() -> Bool;
     fn LLVMParseCommandLineOptions(
         argc: c_int,
@@ -82,27 +70,13 @@ unsafe fn configure_llvm(cg_opts: &[String], tg_opts: &[String]) {
         }
     }
 
-    // if sess.opts.debugging_opts.llvm_time_trace {
-    //     llvm::LLVMTimeTraceProfilerInitialize();
-    // }
-
-    let registry = LLVMGetGlobalPassRegistry();
-    LLVMInitializeCore(registry);
-    LLVMInitializeCodeGen(registry);
-    LLVMInitializeScalarOpts(registry);
-    LLVMInitializeVectorization(registry);
-    LLVMInitializeIPO(registry);
-    LLVMInitializeAnalysis(registry);
-    LLVMInitializeTransformUtils(registry);
-    LLVMInitializeInstCombine(registry);
-    LLVMInitializeTarget(registry);
-
     initialize_available_targets();
 
+    let overview = CString::new("").unwrap();
     LLVMParseCommandLineOptions(
         llvm_args.len() as c_int,
         llvm_args.as_ptr(),
-        b"".as_ptr() as *const c_char,
+        overview.as_ptr(),
     );
 }
 

@@ -187,16 +187,22 @@ fn main() {
     let version = output(&mut cmd).trim().to_owned();
     let version_components: Vec<_> = version.split('.').collect();
     if let [major, minor, patch] = version_components.as_slice() {
-        let major: Result<u32, _> = major.parse();
-        let minor: Result<u32, _> = minor.parse();
-        let patch: Result<u32, _> = patch.parse();
+        // Some llvm-config builds report versions with suffixes like
+        // "23.0.0git" — strip any trailing non-numeric characters.
+        let parse_version_part = |s: &str| -> Result<u32, _> {
+            let numeric: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+            numeric.parse()
+        };
+        let major = parse_version_part(major);
+        let minor = parse_version_part(minor);
+        let patch = parse_version_part(patch);
         if let (Ok(major), Ok(minor), Ok(patch)) = (major, minor, patch) {
             println!("cargo:rustc-env=LLVM_VERSION_MAJOR={}", major);
             println!("cargo:rustc-env=LLVM_VERSION_MINOR={}", minor);
             println!("cargo:rustc-env=LLVM_VERSION_PATCH={}", patch);
         } else {
             fail(&format!(
-                "Invalid LLVM version {:?}!\nExpected 3 numbers separated by '.' foound {:?}",
+                "Invalid LLVM version {:?}!\nExpected 3 numbers separated by '.' found {:?}",
                 version, components
             ))
         }
@@ -266,6 +272,7 @@ fn main() {
             .trim_end_matches(".lib")
             .trim_end_matches(".so")
             .trim_end_matches(".a")
+            .trim_end_matches(".dylib")
             .trim_start_matches("lib");
 
         // Don't need or want this library, but LLVM's CMake build system
@@ -296,14 +303,24 @@ fn main() {
             } else if let Some(stripped) = lib.strip_prefix('-') {
                 stripped
             } else if Path::new(lib).exists() {
-                // On MSVC llvm-config will print the full name to libraries, but
-                // we're only interested in the name part
+                // llvm-config may print the full path to libraries (e.g. on
+                // macOS with Homebrew). Add the directory to the link search
+                // path and extract the library name by stripping the extension.
+                if let Some(parent) = Path::new(lib).parent() {
+                    println!("cargo:rustc-link-search=native={}", parent.display());
+                }
                 let name = Path::new(lib).file_name().unwrap().to_str().unwrap();
                 name.trim_end_matches(".lib")
+                    .trim_end_matches(".dylib")
+                    .trim_end_matches(".so")
+                    .trim_end_matches(".a")
+                    .trim_start_matches("lib")
             } else if lib.ends_with(".lib") {
                 // Some MSVC libraries just come up with `.lib` tacked on, so chop
                 // that off
                 lib.trim_end_matches(".lib")
+            } else if lib.ends_with(".dylib") {
+                lib.trim_end_matches(".dylib").trim_start_matches("lib")
             } else {
                 continue;
             };
